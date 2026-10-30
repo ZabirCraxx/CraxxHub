@@ -4,17 +4,48 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
 
-if CoreGui:FindFirstChild("CleanHubAndroid") then
-    CoreGui.CleanHubAndroid:Destroy()
+-- Safe UI Parent (Supports gethui() for advanced Android executors or falls back to CoreGui)
+local guiParent = nil
+if syn and syn.protect_gui then
+    guiParent = CoreGui
+elseif gethui then
+    guiParent = gethui()
+else
+    guiParent = CoreGui
+end
+
+if guiParent:FindFirstChild("CleanHubAndroid") then
+    guiParent.CleanHubAndroid:Destroy()
 end
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "CleanHubAndroid"
 gui.ResetOnSpawn = false
-gui.Parent = CoreGui
+gui.Parent = guiParent
+
+-- Connection tracker for memory leak prevention
+local connections = {}
+local function trackConnection(conn)
+    table.insert(connections, conn)
+    return conn
+end
+
+-- Safe Drawing check for Android executors
+local hasDrawing = (Drawing ~= nil and Drawing.new ~= nil)
+local tracerLines = {}
+
+local function cleanupTracers()
+    for _, line in pairs(tracerLines) do
+        if line and typeof(line.Remove) == "function" then
+            pcall(function() line:Remove() end)
+        end
+    end
+    tracerLines = {}
+end
 
 local Toggle = Instance.new("TextButton")
 Toggle.Size = UDim2.new(0, 50, 0, 50)
@@ -53,7 +84,7 @@ Title.Size = UDim2.new(1, -70, 0, 36)
 Title.Position = UDim2.new(0, 10, 0, 0)
 Title.BackgroundTransparency = 1
 Title.Font = Enum.Font.GothamBold
-Title.Text = "CleanHub Mobile"
+Title.Text = "CleanHub Mobile (Live Target)"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 14
 Title.TextXAlignment = Enum.TextXAlignment.Left
@@ -113,7 +144,7 @@ ConfirmText.Size = UDim2.new(1, 0, 0, 40)
 ConfirmText.Position = UDim2.new(0, 0, 0.3, 0)
 ConfirmText.BackgroundTransparency = 1
 ConfirmText.Font = Enum.Font.GothamBold
-ConfirmText.Text = "Close Hub?"
+ConfirmText.Text = "Close Hub & Clean Up?"
 ConfirmText.TextColor3 = Color3.fromRGB(255, 255, 255)
 ConfirmText.TextSize = 14
 ConfirmText.ZIndex = 11
@@ -152,6 +183,12 @@ NoBtn.MouseButton1Click:Connect(function()
 end)
 
 YesBtn.MouseButton1Click:Connect(function()
+    for _, conn in ipairs(connections) do
+        if conn and conn.Connected then
+            conn:Disconnect()
+        end
+    end
+    cleanupTracers()
     gui:Destroy()
 end)
 
@@ -183,7 +220,8 @@ local function createPage(name)
     page.Size = UDim2.new(1, 0, 1, 0)
     page.BackgroundTransparency = 1
     page.Visible = false
-    page.CanvasSize = UDim2.new(0, 0, 0, 550)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
     page.ScrollBarThickness = 4
     page.Parent = Container
 
@@ -201,6 +239,7 @@ local playerPage = createPage("Player")
 local targetPage = createPage("Target")
 local tpPage = createPage("TP")
 local visualPage = createPage("Visual")
+local miscPage = createPage("Misc")
 
 local function createTab(name, targetPageObj)
     local tabBtn = Instance.new("TextButton")
@@ -223,6 +262,7 @@ createTab("Player", playerPage)
 createTab("Target", targetPage)
 createTab("TP", tpPage)
 createTab("Visual", visualPage)
+createTab("Misc", miscPage)
 playerPage.Visible = true
 
 local function createButtonOnPage(page, name, callback)
@@ -336,6 +376,7 @@ local function createSliderOnPage(page, title, min, max, default, callback)
     end)
 end
 
+-- ==================== PLAYER FEATURES ====================
 local flying = false
 local flySpeed = 50
 local bv, bg = nil, nil
@@ -349,7 +390,6 @@ createButtonOnPage(playerPage, "Fly", function(state)
     if not root or not hum then return end
 
     if flying then
-        hum.PlatformStand = true
         bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
         bv.Velocity = Vector3.zero
@@ -362,7 +402,6 @@ createButtonOnPage(playerPage, "Fly", function(state)
     else
         if bv then bv:Destroy() bv = nil end
         if bg then bg:Destroy() bg = nil end
-        hum.PlatformStand = false
     end
 end)
 
@@ -381,28 +420,26 @@ createButtonOnPage(playerPage, "Noclip", function(state)
     noclipEnabled = state
 end)
 
-RunService.Stepped:Connect(function()
-    if noclipEnabled then
-        local char = player.Character
-        if char then
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
-            end
+trackConnection(RunService.Stepped:Connect(function()
+    if not noclipEnabled then return end
+    local char = player.Character
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.CanCollide then
+            part.CanCollide = false
         end
     end
-end)
+end))
 
 local infJumpEnabled = false
 createButtonOnPage(playerPage, "Infinite Jump", function(state) infJumpEnabled = state end)
-UserInputService.JumpRequest:Connect(function()
+trackConnection(UserInputService.JumpRequest:Connect(function()
     if infJumpEnabled then
         local char = player.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end
-end)
+end))
 
 local godConn = nil
 createButtonOnPage(playerPage, "Unlimited Health", function(state)
@@ -411,12 +448,14 @@ createButtonOnPage(playerPage, "Unlimited Health", function(state)
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         if hum then
             hum.Health = hum.MaxHealth
+            if godConn then godConn:Disconnect() end
             godConn = hum.HealthChanged:Connect(function()
                 if hum.Health < hum.MaxHealth then hum.Health = hum.MaxHealth end
             end)
+            trackConnection(godConn)
         end
     else
-        if godConn then godConn:Disconnect() end
+        if godConn then godConn:Disconnect() godConn = nil end
     end
 end)
 
@@ -425,16 +464,16 @@ createButtonOnPage(playerPage, "No-Touch Hazard Shield", function(state)
     hazardShieldEnabled = state
 end)
 
-RunService.Stepped:Connect(function()
+trackConnection(RunService.Stepped:Connect(function()
+    if not hazardShieldEnabled then return end
     local char = player.Character
-    if char then
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanTouch = not hazardShieldEnabled
-            end
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanTouch = false
         end
     end
-end)
+end))
 
 local antiVoidEnabled = false
 createButtonOnPage(playerPage, "Anti-Void Protection", function(state)
@@ -442,21 +481,179 @@ createButtonOnPage(playerPage, "Anti-Void Protection", function(state)
 end)
 
 local lastSafePos = CFrame.new(0, 10, 0)
-RunService.Heartbeat:Connect(function()
+trackConnection(RunService.Heartbeat:Connect(function()
     local char = player.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
-    if root and root.Position.Y > -30 then
-        lastSafePos = root.CFrame
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    
+    if root and hum and hum.Health > 0 then
+        if root.Position.Y > -20 and math.abs(root.AssemblyLinearVelocity.Y) < 50 then
+            lastSafePos = root.CFrame
+        end
+
+        if antiVoidEnabled and root.Position.Y < -50 then
+            root.CFrame = lastSafePos + Vector3.new(0, 5, 0)
+            root.AssemblyLinearVelocity = Vector3.zero
+        end
+    end
+end))
+
+-- ==================== ADVANCED LIVE TARGET FEATURES ====================
+local selectedTarget = nil
+
+local function createLiveTargetMenu(page)
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Size = UDim2.new(0, 290, 0, 140)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Parent = page
+    Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 6)
+
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, 0, 0, 26)
+    header.BackgroundTransparency = 1
+    header.Font = Enum.Font.GothamBold
+    header.Text = "Live Target Selection: [None]"
+    header.TextColor3 = Color3.fromRGB(255, 140, 0)
+    header.TextSize = 12
+    header.Parent = mainFrame
+
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, -8, 1, -32)
+    scroll.Position = UDim2.new(0, 4, 0, 28)
+    scroll.BackgroundTransparency = 1
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.ScrollBarThickness = 3
+    scroll.Parent = mainFrame
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 4)
+    layout.Parent = scroll
+
+    local function refreshPlayerList()
+        for _, child in ipairs(scroll:GetChildren()) do
+            if child:IsA("TextButton") then
+                child:Destroy()
+            end
+        end
+
+        for _, op in ipairs(Players:GetPlayers()) do
+            if op ~= player then
+                local pBtn = Instance.new("TextButton")
+                pBtn.Size = UDim2.new(1, -4, 0, 28)
+                pBtn.BackgroundColor3 = (selectedTarget == op) and Color3.fromRGB(0, 170, 127) or Color3.fromRGB(45, 45, 45)
+                pBtn.Font = Enum.Font.GothamMedium
+                pBtn.Text = op.Name .. " (" .. op.DisplayName .. ")"
+                pBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                pBtn.TextSize = 11
+                pBtn.Parent = scroll
+                Instance.new("UICorner", pBtn).CornerRadius = UDim.new(0, 4)
+
+                pBtn.MouseButton1Click:Connect(function()
+                    selectedTarget = op
+                    header.Text = "Live Target: " .. op.Name
+                    refreshPlayerList()
+                end)
+            end
+        end
     end
 
-    if antiVoidEnabled then
-        if root and root.Position.Y < -50 then
-            root.CFrame = lastSafePos
-            root.AssemblyLinearVelocity = Vector3.zero
+    refreshPlayerList()
+    trackConnection(Players.PlayerAdded:Connect(refreshPlayerList))
+    trackConnection(Players.PlayerRemoving:Connect(refreshPlayerList))
+end
+
+createLiveTargetMenu(targetPage)
+
+createActionBtn(targetPage, "TP Behind Target", function()
+    if selectedTarget and selectedTarget.Character and selectedTarget.Character:FindFirstChild("HumanoidRootPart") then
+        local char = player.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if root then
+            root.CFrame = selectedTarget.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
         end
     end
 end)
 
+-- Spectate Target Toggle
+local spectating = false
+createButtonOnPage(targetPage, "Spectate Target", function(state)
+    spectating = state
+end)
+
+trackConnection(RunService.RenderStepped:Connect(function()
+    local cam = Workspace.CurrentCamera
+    if spectating and selectedTarget and selectedTarget.Character then
+        local targetHum = selectedTarget.Character:FindFirstChildOfClass("Humanoid")
+        if targetHum then
+            cam.CameraSubject = targetHum
+        end
+    else
+        local char = player.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and cam.CameraSubject ~= hum then
+                cam.CameraSubject = hum
+            end
+        end
+    end
+end))
+
+-- Hug Target Toggle
+local hugging = false
+createButtonOnPage(targetPage, "Hug Target", function(state)
+    hugging = state
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hugging and hum then
+        local anim = Instance.new("Animation")
+        anim.AnimationId = "rbxassetid://5918726674" -- Hug / Emote pose
+        local track = hum:LoadAnimation(anim)
+        track:Play()
+    end
+end)
+
+trackConnection(RunService.Heartbeat:Connect(function()
+    if hugging and selectedTarget and selectedTarget.Character then
+        local char = player.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local targetRoot = selectedTarget.Character:FindFirstChild("HumanoidRootPart")
+        if root and targetRoot then
+            root.CFrame = targetRoot.CFrame * CFrame.new(0, 0, -1.2) -- Stay right in front (hug position)
+            root.AssemblyLinearVelocity = Vector3.zero
+        end
+    end
+end))
+
+-- Sit on Target Toggle
+local sittingOnTarget = false
+createButtonOnPage(targetPage, "Sit On Target", function(state)
+    sittingOnTarget = state
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if sittingOnTarget then
+            hum:ChangeState(Enum.HumanoidStateType.Seated)
+        else
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end
+    end
+end)
+
+trackConnection(RunService.Heartbeat:Connect(function()
+    if sittingOnTarget and selectedTarget and selectedTarget.Character then
+        local char = player.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local targetHead = selectedTarget.Character:FindFirstChild("Head") or selectedTarget.Character:FindFirstChild("HumanoidRootPart")
+        if root and targetHead then
+            root.CFrame = targetHead.CFrame + Vector3.new(0, 2.2, 0) -- Hover right on top of their head
+            root.AssemblyLinearVelocity = Vector3.zero
+        end
+    end
+end))
+
+-- ==================== TP FEATURES ====================
 local savedPos = nil
 local smoothSpeed = 50
 
@@ -489,6 +686,7 @@ createActionBtn(tpPage, "Smooth TP to Waypoint", function()
     end
 end)
 
+-- ==================== VISUAL FEATURES ====================
 createButtonOnPage(visualPage, "Fullbright", function(state)
     if state then
         Lighting.Brightness = 2
@@ -502,32 +700,145 @@ createButtonOnPage(visualPage, "Fullbright", function(state)
     end
 end)
 
+local espEnabled = false
+local espActiveConnections = {}
+
+local function updateESPForPlayer(op)
+    if op == player then return end
+    local function setupCharacter(char)
+        if not espEnabled then return end
+        if not char:FindFirstChild("HubHighlight") then
+            local h = Instance.new("Highlight")
+            h.Name = "HubHighlight"
+            h.Adornee = char
+            h.FillColor = Color3.fromRGB(0, 170, 127)
+            h.Parent = char
+        end
+    end
+    if op.Character then setupCharacter(op.Character) end
+    local conn = op.CharacterAdded:Connect(setupCharacter)
+    table.insert(espActiveConnections, conn)
+    trackConnection(conn)
+end
+
 createButtonOnPage(visualPage, "Player ESP", function(state)
-    local espOn = state
-    for _, op in ipairs(Players:GetPlayers()) do
-        if op ~= player and op.Character then
-            local hl = op.Character:FindFirstChild("HubHighlight")
-            if espOn and not hl then
-                local h = Instance.new("Highlight")
-                h.Name = "HubHighlight"
-                h.Adornee = op.Character
-                h.FillColor = Color3.fromRGB(0, 170, 127)
-                h.Parent = op.Character
-            elseif not espOn and hl then
-                hl:Destroy()
+    espEnabled = state
+    if espEnabled then
+        for _, op in ipairs(Players:GetPlayers()) do updateESPForPlayer(op) end
+        local playerAddedConn = Players.PlayerAdded:Connect(updateESPForPlayer)
+        table.insert(espActiveConnections, playerAddedConn)
+        trackConnection(playerAddedConn)
+    else
+        for _, conn in ipairs(espActiveConnections) do
+            if conn.Connected then conn:Disconnect() end
+        end
+        espActiveConnections = {}
+        for _, op in ipairs(Players:GetPlayers()) do
+            if op.Character then
+                local hl = op.Character:FindFirstChild("HubHighlight")
+                if hl then hl:Destroy() end
             end
         end
     end
 end)
 
-RunService.RenderStepped:Connect(function()
+local tracersEnabled = false
+createButtonOnPage(visualPage, "Player Tracers", function(state)
+    if not hasDrawing then
+        warn("CleanHub: Tracers are disabled because your executor lacks the Drawing library.")
+        return
+    end
+    tracersEnabled = state
+    if not tracersEnabled then cleanupTracers() end
+end)
+
+trackConnection(RunService.RenderStepped:Connect(function()
+    if not tracersEnabled or not hasDrawing then return end
+    local cam = Workspace.CurrentCamera
+    local viewportSize = cam.ViewportSize
+    
+    for _, op in ipairs(Players:GetPlayers()) do
+        if op ~= player and op.Character then
+            local root = op.Character:FindFirstChild("HumanoidRootPart")
+            local hum = op.Character:FindFirstChildOfClass("Humanoid")
+            if root and hum and hum.Health > 0 then
+                local pos, onScreen = cam:WorldToViewportPoint(root.Position)
+                local line = tracerLines[op]
+                if not line then
+                    pcall(function()
+                        line = Drawing.new("Line")
+                        line.Thickness = 1.5
+                        line.Color = Color3.fromRGB(0, 170, 127)
+                        line.Transparency = 0.7
+                        tracerLines[op] = line
+                    end)
+                end
+                if line then
+                    if onScreen then
+                        line.Visible = true
+                        line.From = Vector2.new(viewportSize.X / 2, viewportSize.Y)
+                        line.To = Vector2.new(pos.X, pos.Y)
+                    else
+                        line.Visible = false
+                    end
+                end
+            else
+                if tracerLines[op] then tracerLines[op].Visible = false end
+            end
+        else
+            if tracerLines[op] then tracerLines[op].Visible = false end
+        end
+    end
+end))
+
+local fogRemoved = false
+createButtonOnPage(visualPage, "Remove Fog", function(state)
+    fogRemoved = state
+    if fogRemoved then
+        Lighting.FogEnd = 100000
+        Lighting.FogStart = 0
+        for _, child in ipairs(Lighting:GetChildren()) do
+            if child:IsA("Atmosphere") then child.Parent = nil end
+        end
+    else
+        Lighting.FogEnd = 1000
+        Lighting.FogStart = 0
+    end
+end)
+
+-- ==================== MISC FEATURES ====================
+createButtonOnPage(miscPage, "FPS Booster", function(state)
+    Lighting.GlobalShadows = not state
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("PostEffect") then v.Enabled = not state end
+    end
+    Workspace.Terrain.WaterWaveSize = state and 0 or 0.1
+    Workspace.Terrain.WaterWaveTransparency = state and 1 or 0.3
+    Workspace.Terrain.WaterReflectance = state and 0 or 1
+end)
+
+createButtonOnPage(miscPage, "Potato Graphics", function(state)
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            if state then
+                obj.Material = Enum.Material.SmoothPlastic
+                obj.Reflectance = 0
+            end
+        elseif obj:IsA("Texture") or obj:IsA("Decal") then
+            obj.Transparency = state and 1 or 0
+        end
+    end
+end)
+
+-- ==================== FLY RENDER LOOP ====================
+trackConnection(RunService.RenderStepped:Connect(function()
     if flying and bv and bg then
         local char = player.Character
         if char then
             local hum = char:FindFirstChildOfClass("Humanoid")
             local root = char:FindFirstChild("HumanoidRootPart")
             if hum and root then
-                local cam = workspace.CurrentCamera
+                local cam = Workspace.CurrentCamera
                 local moveDir = Vector3.zero
                 if hum.MoveDirection.Magnitude > 0 then
                     local localDir = cam.CFrame:VectorToObjectSpace(hum.MoveDirection)
@@ -538,4 +849,4 @@ RunService.RenderStepped:Connect(function()
             end
         end
     end
-end)
+end))
