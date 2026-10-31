@@ -464,6 +464,16 @@ end)
 local hazardShieldEnabled = false
 createButtonOnPage(playerPage, "No-Touch Hazard Shield", function(state)
     hazardShieldEnabled = state
+    if not hazardShieldEnabled then
+        local char = player.Character
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanTouch = true
+                end
+            end
+        end
+    end
 end)
 
 trackConnection(RunService.Stepped:Connect(function()
