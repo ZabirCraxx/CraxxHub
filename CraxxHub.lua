@@ -1,3 +1,5 @@
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -807,6 +809,42 @@ createButtonOnPage(visualPage, "Remove Fog", function(state)
 end)
 
 -- ==================== MISC FEATURES ====================
+createActionBtn(miscPage, "Rejoin Server", function()
+    pcall(function()
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+    end)
+end)
+
+createActionBtn(miscPage, "Server Hop", function()
+    pcall(function()
+        local servers = {}
+        local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/public?sortOrder=Asc&limit=100"
+        local success, response = pcall(function()
+            return game:HttpGet(url)
+        end)
+        
+        if success and response then
+            local decoded = HttpService:JSONDecode(response)
+            if decoded and decoded.data then
+                for _, server in ipairs(decoded.data) do
+                    if type(server) == "table" and server.maxPlayers and server.playing and server.id then
+                        if server.playing < server.maxPlayers and server.id ~= game.JobId then
+                            table.insert(servers, server.id)
+                        end
+                    end
+                end
+            end
+        end
+        
+        if #servers > 0 then
+            local targetServerId = servers[math.random(1, #servers)]
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, targetServerId, player)
+        else
+            warn("CleanHub: Could not find an alternative server to hop into.")
+        end
+    end)
+end)
+
 createButtonOnPage(miscPage, "FPS Booster", function(state)
     Lighting.GlobalShadows = not state
     for _, v in ipairs(Lighting:GetChildren()) do
